@@ -176,19 +176,98 @@ function formatMembers(members) {
   return parts.length ? `Members: ${parts.join(', ')}.` : '';
 }
 
-function formatDinner(dinner) {
-  if (!dinner || typeof dinner !== 'object' || !dinner.city) return '';
+// The founder view lists at most the next six dinners, matching the endpoint's own ceiling.
+const MAX_DINNERS = 6;
+
+/** "Thu Sep 18" from an ISO date, in UTC so a bare date never shifts a day. Pure. */
+function formatDinnerDay(isoDate) {
+  const day = formatDay(isoDate);
+  if (!day) return '';
+  try {
+    const weekday = new Intl.DateTimeFormat('en-US', { weekday: 'short', timeZone: 'UTC' }).format(new Date(isoDate));
+    return weekday ? `${weekday} ${day}` : day;
+  } catch {
+    return day;
+  }
+}
+
+/** "7pm" or "7:30pm" from a 24-hour "HH:MM". Empty string for anything else. Pure. */
+function friendlyTime(raw) {
+  if (typeof raw !== 'string') return '';
+  const match = raw.trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return '';
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return '';
+  const period = hour < 12 ? 'am' : 'pm';
+  const hour12 = hour % 12 === 0 ? 12 : hour % 12;
+  return minute === 0 ? `${hour12}${period}` : `${hour12}:${String(minute).padStart(2, '0')}${period}`;
+}
+
+/** True when a dinner carries the founder-view fields, not just {city, date, status}. Pure. */
+function hasFounderFields(dinner) {
+  return num(dinner.seatsFilled) !== null
+    || num(dinner.seatsTotal) !== null
+    || typeof dinner.joiningOpen === 'boolean'
+    || Array.isArray(dinner.attendees);
+}
+
+/** "attending Ana, Ben and 3 more", or empty when nobody is listed. Pure. */
+function formatAttending(dinner) {
+  if (!Array.isArray(dinner.attendees)) return '';
+  const names = dinner.attendees
+    .map((name) => (typeof name === 'string' ? name.trim() : ''))
+    .filter((name) => name !== '');
+  if (names.length === 0) return '';
+  const more = num(dinner.plusMore);
+  const tail = more !== null && more > 0 ? ` and ${more} more` : '';
+  return `attending ${names.join(', ')}${tail}`;
+}
+
+/**
+ * The founder view of one dinner as a single comma-separated sentence:
+ * "Vancouver Thu Sep 17 7pm, 6 of 8 seats, joining open, attending Ana, Ben, Cy".
+ * Seats and joining are stated when present; attending is appended only when the
+ * list is non-empty. Pure.
+ */
+function formatFounderDinner(dinner) {
+  const day = formatDinnerDay(dinner.date);
+  const time = friendlyTime(dinner.time);
+  const clauses = [[dinner.city, day, time].filter(Boolean).join(' ')];
+
+  const filled = num(dinner.seatsFilled);
+  const total = num(dinner.seatsTotal);
+  if (filled !== null && total !== null) clauses.push(`${filled} of ${total} seats`);
+
+  if (typeof dinner.joiningOpen === 'boolean') {
+    clauses.push(dinner.joiningOpen ? 'joining open' : 'joining closed');
+  }
+
+  const attending = formatAttending(dinner);
+  if (attending) clauses.push(attending);
+
+  return clauses.join(', ');
+}
+
+/** The older {city, date, status} view, kept so a pre-widening endpoint still renders. Pure. */
+function formatLegacyDinner(dinner) {
   const day = formatDay(dinner.date);
   const when = day ? ` ${day}` : '';
   const status = dinner.status ? ` (${dinner.status})` : '';
   return `${dinner.city}${when}${status}`;
 }
 
+function formatDinner(dinner) {
+  if (!dinner || typeof dinner !== 'object' || !dinner.city) return '';
+  return hasFounderFields(dinner) ? formatFounderDinner(dinner) : formatLegacyDinner(dinner);
+}
+
 function formatDinners(dinners) {
   if (!Array.isArray(dinners.upcoming)) return '';
   if (dinners.upcoming.length === 0) return 'Upcoming dinners: none scheduled.';
-  const items = dinners.upcoming.map(formatDinner).filter((item) => item !== '');
-  return items.length ? `Upcoming dinners: ${items.join(', ')}.` : '';
+  const items = dinners.upcoming.slice(0, MAX_DINNERS).map(formatDinner).filter((item) => item !== '');
+  // One sentence per dinner, so the dinners are separated by a period, not a comma.
+  return items.length ? `Upcoming dinners: ${items.join('. ')}.` : '';
 }
 
 /**
