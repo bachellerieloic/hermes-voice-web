@@ -7,6 +7,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { clientKey, createFailureLimiter, isOriginAllowed, tokensMatch } from './auth.mjs';
 import { ConfigError, loadConfig } from './config.mjs';
 import { authOk, encode } from './protocol.mjs';
+import { createSnapshotProvider } from './snapshot.mjs';
 import { createStaticHandler } from './static.mjs';
 import { createVoiceSession } from './voice-session.mjs';
 import { AUTH_TIMEOUT_MS, awaitAuth } from './ws-auth.mjs';
@@ -27,6 +28,15 @@ export function createGateway(config, deps = {}) {
   const serveStatic = createStaticHandler({ publicDir: deps.publicDir ?? PUBLIC_DIR, basePath: config.basePath });
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_CONTROL_PAYLOAD });
   const sessions = new Set();
+  // One shared provider so its cache is reused across every voice session.
+  const snapshot = deps.snapshot ?? createSnapshotProvider({
+    url: config.agentSnapshotUrl,
+    token: config.agentSnapshotToken,
+    ttlMs: config.snapshotTtlMs,
+    brief: config.agentSnapshotBrief,
+    fetchImpl: deps.fetchImpl ?? fetch,
+    log,
+  });
 
   const server = createServer(async (req, res) => {
     try {
@@ -45,7 +55,7 @@ export function createGateway(config, deps = {}) {
       socket: ws,
       config,
       sessionId,
-      deps: { fetchImpl: deps.fetchImpl ?? fetch, WebSocketImpl: deps.WebSocketImpl ?? WebSocket, log },
+      deps: { fetchImpl: deps.fetchImpl ?? fetch, WebSocketImpl: deps.WebSocketImpl ?? WebSocket, log, snapshot },
     });
     sessions.add(voice);
     ws.on('close', () => sessions.delete(voice));

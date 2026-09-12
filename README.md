@@ -173,6 +173,10 @@ Desktop Chrome, Edge, Safari and Firefox work the same way at the same URL.
 | `TRUST_PROXY` | `false` | Read `X-Forwarded-For` for the rate limiter |
 | `ALLOW_QUERY_TOKEN` | `false` | Compatibility only: also accept `?token=` on the upgrade (it lands in proxy access logs) |
 | `ACK_DELAY_MS` / `ACK_TEXT` | `1500` / `On it.` | Spoken filler when the first token is slow |
+| `AGENT_SNAPSHOT_URL` | empty | Read-only endpoint returning live business numbers. Empty disables the feature |
+| `AGENT_SNAPSHOT_TOKEN` | empty | Bearer token sent to that endpoint. Empty disables the feature |
+| `SNAPSHOT_TTL_MS` | `120000` | How long a fetched snapshot is cached before the next turn refetches it |
+| `AGENT_SNAPSHOT_BRIEF` | `false` | Request the upstream AI brief (`?brief=1`); it costs an LLM call upstream |
 
 Security model: the page itself is public and static. A WebSocket upgrade needs an allowed `Origin`;
 the socket is then accepted and must send `{"type":"auth","token":"..."}` as its first message
@@ -182,6 +186,48 @@ socket with code 4401, five wrong tokens from one client inside a minute get 442
 minute, and a silent socket gets 4408. The page treats 4401 and 4429 as final: it clears the stored
 token and asks for a new one instead of retrying. Tokens are compared in constant time and are never
 logged or echoed. A token in the query string is refused with HTTP 400 unless `ALLOW_QUERY_TOKEN=true`.
+
+## Business awareness
+
+An optional feature lets the assistant answer questions about your own numbers, such as "how were
+sessions this week", "how much revenue", "how many new members" or "what dinners are coming up". It
+does no analytics itself: it reads one already-deployed, read-only endpoint and turns the result into a
+short system note added ahead of each turn, so the model can cite the figures and, when a number is
+missing, say so instead of guessing.
+
+The endpoint is called as `GET {AGENT_SNAPSHOT_URL}` with header `Authorization: Bearer
+{AGENT_SNAPSHOT_TOKEN}` and must return JSON of this shape (every section is nullable, and only the
+non-null ones are rendered):
+
+```
+{ generatedAt, timezone,
+  web: { ga4: { range: {startDate, endDate}, previousRange, sessions, conversions,
+                wow: { sessions: {abs, pct, arrow}, conversions: {...} } } | null,
+         gsc: { range, previousRange, clicks, impressions, wow: {clicks, impressions} } | null,
+         brief: string | null },
+  revenue: { mrr, currency, activeSubscriptions } | null,
+  members: { totalActive, newThisMonth } | null,
+  dinners: { upcoming: [ {city, date, status} ] } | null,
+  errors: [] }
+```
+
+The rendered note is compact and speakable, one line per section, with the date range so the number is
+unambiguous and the week-over-week direction as the words up, down or flat:
+
+```
+Business snapshot (generated 2026-09-12 11:59 America/Vancouver):
+Web, Sep 5 to Sep 11: 1503 sessions, up 929% week over week; 0 conversions. Search Sep 3 to Sep 9: 31 clicks, 1784 impressions, clicks up 11%.
+Revenue: MRR 98 CAD, 2 active subscriptions.
+Members: 187 active, 3 new this month.
+Upcoming dinners: Vancouver Sep 18 (open), Toronto Sep 25 (open).
+```
+
+Set `AGENT_SNAPSHOT_URL` and `AGENT_SNAPSHOT_TOKEN` to switch it on. The result is cached for
+`SNAPSHOT_TTL_MS` (default two minutes) and refetched lazily once stale. Set `AGENT_SNAPSHOT_BRIEF=true`
+to also ask for the upstream AI brief (`?brief=1`), which costs an LLM call upstream. The feature is
+optional and fully fail-safe: with an empty url or token nothing is fetched and no note is added, and
+any failure (a non-200, a network error, bad JSON) simply skips the note for that turn. The endpoint is
+only ever read, never written.
 
 ## What it costs
 

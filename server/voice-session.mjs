@@ -6,6 +6,7 @@ import { pcmBytesToMs, streamSpeech } from './nari-tts.mjs';
 import { assistantText, decodeClientMessage, encode, error as errorMessage } from './protocol.mjs';
 import { emptySentenceBuffer, flushBuffer, pushDelta } from './sentences.mjs';
 import { Effect, State, createSession, reduce } from './session.mjs';
+import { prependSnapshotMessage } from './snapshot.mjs';
 
 const OPEN = 1;
 
@@ -16,7 +17,7 @@ function friendlyError(err) {
 }
 
 export function createVoiceSession({ socket, config, sessionId, deps }) {
-  const { fetchImpl = fetch, WebSocketImpl, log = console } = deps;
+  const { fetchImpl = fetch, WebSocketImpl, log = console, snapshot = null } = deps;
   let session = createSession();
   let active = null;
   let ackTimer = null;
@@ -113,14 +114,28 @@ export function createVoiceSession({ socket, config, sessionId, deps }) {
     runHermesTurn(ctx, messages).catch((err) => log.error(`[session] turn ${turn} crashed: ${err.message}`));
   }
 
+  // Prepend the current business snapshot as a system message when one is available. The provider
+  // never throws and returns null when disabled or on failure, in which case the messages are unchanged.
+  async function withSnapshotMessages(messages) {
+    if (!snapshot) return messages;
+    try {
+      return prependSnapshotMessage(messages, await snapshot.get());
+    } catch (err) {
+      log.debug?.(`[session] snapshot lookup failed: ${err.message}`);
+      return messages;
+    }
+  }
+
   async function runHermesTurn(ctx, messages) {
     let buffer = emptySentenceBuffer;
     try {
+      const outgoing = await withSnapshotMessages(messages);
+      if (ctx !== active) return;
       const events = streamHermes({
         apiUrl: config.hermesApiUrl,
         apiKey: config.hermesApiKey,
         model: config.hermesModel,
-        messages,
+        messages: outgoing,
         sessionId,
         signal: ctx.hermesAbort.signal,
         fetchImpl,
