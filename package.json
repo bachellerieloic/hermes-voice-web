@@ -1,0 +1,35 @@
+{
+  "name": "hermes-voice-web",
+  "version": "0.1.0",
+  "description": "Talk to your Hermes Agent like Jarvis from a browser or phone",
+  "type": "module",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "server/index.mjs",
+  "scripts": {
+    "start": "node server/index.mjs",
+    "test": "node --test test/*.test.mjs",
+    "vendor-vad": "node scripts/vendor-vad.mjs",
+    "postinstall": "node scripts/vendor-vad.mjs",
+    "check-dashes": "node scripts/check-dashes.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bachellerieloic/hermes-voice-web.git"
+  },
+  "keywords": [
+    "hermes-agent",
+    "voice",
+    "assistant",
+    "websocket",
+    "audioworklet",
+    "nari-labs"
+  ],
+  "dependencies": {
+    "@ricky0123/vad-web": "0.0.30",
+    "ws": "^8.18.0"
+  }
+}

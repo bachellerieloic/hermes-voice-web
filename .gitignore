@@ -1,0 +1,6 @@
+node_modules/
+.env
+public/vad/*
+!public/vad/README.md
+npm-debug.log*
+.DS_Store
