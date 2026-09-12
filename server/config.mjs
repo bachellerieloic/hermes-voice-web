@@ -16,6 +16,7 @@ const DEFAULTS = Object.freeze({
   ALLOWED_ORIGINS: '',
   BASE_PATH: '',
   TRUST_PROXY: 'false',
+  ALLOW_QUERY_TOKEN: 'false',
   ACK_DELAY_MS: '1500',
   ACK_TEXT: 'On it.',
 });
@@ -120,6 +121,7 @@ export function buildConfig(env) {
     allowedOrigins: Object.freeze(parseOrigins(get('ALLOWED_ORIGINS'))),
     basePath: normalizeBasePath(get('BASE_PATH')),
     trustProxy: parseBoolean(get('TRUST_PROXY')),
+    allowQueryToken: parseBoolean(get('ALLOW_QUERY_TOKEN')),
     ackDelayMs,
     ackText: get('ACK_TEXT'),
   });

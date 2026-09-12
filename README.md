@@ -137,9 +137,17 @@ Or a tmux one-liner: `tmux new -d -s voice 'cd ~/hermes-voice-web && npm start'`
    there is nothing to do.
 2. Open the URL in Safari, tap Share, then "Add to Home Screen". Launch it from the icon so it runs
    full screen.
-3. Tap the orb, paste the `VOICE_TOKEN` when asked (stored in that browser only), allow the
-   microphone. From then on it is hands-free: speak, wait, interrupt at will.
-4. Headphones are recommended. Echo cancellation is good but not perfect on a phone speaker, and
+3. Get the token onto the phone. Easiest: send yourself a magic link,
+   `https://your-domain/voice/#token=<VOICE_TOKEN>`. The token sits in the URL fragment, which the
+   browser never sends to the server or to nginx, and the page stores it, removes it from the address
+   bar and connects. Otherwise tap the orb and paste the token; the field trims it, drops anything
+   that is not `A-Z a-z 0-9 . _ -`, and shows the character count with a warning when it is not the
+   48 characters `openssl rand -hex 24` produces (an iOS selection often grabs one extra letter).
+4. Tap the orb and allow the microphone. From then on it is hands-free: speak, wait, interrupt at
+   will. The small line under the orb shows the connection state (connecting, connected,
+   reconnecting in N s, refused). A refused token never loops: the page clears it and asks again with
+   "Token refused, check for an extra character at the start or end".
+5. Headphones are recommended. Echo cancellation is good but not perfect on a phone speaker, and
    the VAD can trigger on loud playback.
 
 Desktop Chrome, Edge, Safari and Firefox work the same way at the same URL.
@@ -158,16 +166,22 @@ Desktop Chrome, Edge, Safari and Firefox work the same way at the same URL.
 | `NARI_STT_MODEL` | `qwen3-asr:free` | `qwen3-asr-fast:free` is quicker |
 | `NARI_LANGUAGE` | `en` | Empty for automatic detection |
 | `NARI_TURN_DETECTION` | `client` | `client`: browser VAD ends the turn. `server_vad`: Nari's `{"type":"server_vad"}` |
-| `VOICE_TOKEN` | required | Shared secret the browser presents on the WebSocket upgrade (16+ chars) |
+| `VOICE_TOKEN` | required | Shared secret the browser sends as the first WebSocket message (16+ chars, 48 recommended) |
 | `HOST` / `PORT` | `127.0.0.1` / `8765` | Bind address |
 | `ALLOWED_ORIGINS` | empty | Comma list of allowed browser origins. Empty means same host as the request |
 | `BASE_PATH` | empty | Mount prefix behind a reverse proxy, for example `/voice` |
 | `TRUST_PROXY` | `false` | Read `X-Forwarded-For` for the rate limiter |
+| `ALLOW_QUERY_TOKEN` | `false` | Compatibility only: also accept `?token=` on the upgrade (it lands in proxy access logs) |
 | `ACK_DELAY_MS` / `ACK_TEXT` | `1500` / `On it.` | Spoken filler when the first token is slow |
 
-Security model: the page itself is public and static; every WebSocket upgrade needs `?token=` to
-match `VOICE_TOKEN` (constant-time compare) and an allowed `Origin`. Five bad tokens from one client
-inside a minute block it for the rest of that minute. Tokens are never logged or echoed.
+Security model: the page itself is public and static. A WebSocket upgrade needs an allowed `Origin`;
+the socket is then accepted and must send `{"type":"auth","token":"..."}` as its first message
+within 5 seconds. The token never appears in a URL, so nginx or Tailscale access logs cannot capture
+it (the magic link keeps it in the fragment, which browsers do not transmit). A wrong token closes the
+socket with code 4401, five wrong tokens from one client inside a minute get 4429 for the rest of that
+minute, and a silent socket gets 4408. The page treats 4401 and 4429 as final: it clears the stored
+token and asks for a new one instead of retrying. Tokens are compared in constant time and are never
+logged or echoed. A token in the query string is refused with HTTP 400 unless `ALLOW_QUERY_TOKEN=true`.
 
 ## What it costs
 
@@ -195,10 +209,10 @@ inside a minute block it for the rest of that minute. Tokens are never logged or
 
 Text frames are JSON, binary frames are audio.
 
-Browser to gateway: `speech_start`, `speech_end` (commit the utterance), `interrupt`,
-`heard_ms {ms}`; binary frames are 16 kHz PCM16 mono.
+Browser to gateway: `auth {token}` (first message, required), `speech_start`, `speech_end` (commit
+the utterance), `interrupt`, `heard_ms {ms}`; binary frames are 16 kHz PCM16 mono.
 
-Gateway to browser: `status {state, detail?}`, `partial {text}`, `final {text}`,
+Gateway to browser: `auth_ok`, `status {state, detail?}`, `partial {text}`, `final {text}`,
 `assistant_text {text, done}`, `turn_done {turn}`, `flush` (empty the playback queue),
 `error {message}`; binary frames are 24 kHz PCM16 mono.
 
@@ -215,8 +229,9 @@ node scripts/e2e-cli.mjs --url ws://127.0.0.1:8765/voice/ws --token "$VOICE_TOKE
 NARI_API_KEY=... node scripts/e2e-cli.mjs --url ws://127.0.0.1:8765/voice/ws --token "$VOICE_TOKEN" --say "What time is it?"
 ```
 
-It resamples the audio to 16 kHz, sends `speech_start`, streams 20 ms frames in real time, sends
-`speech_end`, prints every control message as it arrives, writes the spoken reply to `reply.pcm`
+It resamples the audio to 16 kHz, authenticates with the first message, sends `speech_start`,
+streams 20 ms frames in real time, sends `speech_end`, prints every control message as it arrives,
+writes the spoken reply to `reply.pcm`
 (24 kHz s16le, play it with `ffplay -f s16le -ar 24000 -ac 1 reply.pcm`) and exits 0 on
 `turn_done` with a one-line summary: transcript, assistant text length, audio length, time to the
 first partial and time from `speech_end` to the first audio. It exits 1 on an `error` message, a

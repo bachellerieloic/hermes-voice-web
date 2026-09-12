@@ -123,17 +123,12 @@ async function loadAudio(options, env) {
 
 const sleepUntil = (at) => new Promise((resolve) => setTimeout(resolve, Math.max(0, at - Date.now())));
 
-function redacted(url) {
-  const copy = new URL(url);
-  copy.searchParams.set('token', '***');
-  return copy.toString();
-}
-
+// The token is sent as the first message on the socket, never in the URL (proxy logs would keep it).
 export async function run(options, env = process.env) {
   const audio = await loadAudio(options, env);
   const frames = frameAudio(audio, (TARGET_RATE * FRAME_MS) / 1000);
   const url = new URL(options.url);
-  url.searchParams.set('token', options.token);
+  url.searchParams.delete('token');
   url.searchParams.set('session', options.session);
   const origin = options.origin ?? `https://${url.host}`;
   console.log(`audio: ${audio.length} samples at ${TARGET_RATE} Hz (${Math.round((audio.length / TARGET_RATE) * 1000)} ms, ${frames.length} frames of ${FRAME_MS} ms)`);
@@ -177,14 +172,19 @@ export async function run(options, env = process.env) {
       console.error(`socket error: ${err.message}`);
       finish(1);
     });
-    ws.on('close', (code) => {
-      if (!finished) {
-        console.error(`socket closed (${code}) before turn_done`);
-        finish(1);
-      }
+    ws.on('close', (code, reason) => {
+      if (finished) return;
+      if (code === 4401) console.error('token rejected (4401): the token does not match VOICE_TOKEN on the gateway; check for an extra character at the start or end');
+      else if (code === 4429) console.error('rate limited (4429): too many bad tokens from this address, wait a minute and retry');
+      else if (code === 4408) console.error('auth timeout (4408): the gateway did not receive the auth message in time');
+      else console.error(`socket closed (${code} ${reason?.toString() ?? ''}) before turn_done`);
+      finish(1);
     });
-    ws.on('open', async () => {
-      console.log(`${stamp()} connected to ${redacted(url)}`);
+    ws.on('open', () => {
+      console.log(`${stamp()} connected to ${url}, authenticating`);
+      ws.send(JSON.stringify({ type: 'auth', token: options.token }));
+    });
+    const streamAudio = async () => {
       ws.send(JSON.stringify({ type: 'speech_start' }));
       const start = Date.now();
       stats.firstFrameAt = start;
@@ -196,7 +196,7 @@ export async function run(options, env = process.env) {
       stats.speechEndAt = Date.now();
       ws.send(JSON.stringify({ type: 'speech_end' }));
       console.log(`${stamp()} sent ${frames.length} frames and speech_end`);
-    });
+    };
     ws.on('message', (data, isBinary) => {
       if (isBinary) {
         if (stats.firstAudioAt === null) {
@@ -215,7 +215,8 @@ export async function run(options, env = process.env) {
       } catch {
         return;
       }
-      if (message.type === 'partial' && stats.firstPartialAt === null) stats.firstPartialAt = Date.now();
+      if (message.type === 'auth_ok') streamAudio().catch((err) => { console.error(err.message); finish(1); });
+      else if (message.type === 'partial' && stats.firstPartialAt === null) stats.firstPartialAt = Date.now();
       else if (message.type === 'final') stats.transcript = message.text;
       else if (message.type === 'assistant_text' && message.text) stats.assistant += message.text;
       else if (message.type === 'error') finish(1);

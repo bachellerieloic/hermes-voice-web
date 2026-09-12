@@ -1,4 +1,4 @@
-// HTTP + WebSocket gateway: serves public/ and upgrades authenticated sockets into voice sessions.
+// HTTP + WebSocket gateway: serves public/ and turns authenticated sockets into voice sessions.
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
@@ -6,21 +6,24 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocket, WebSocketServer } from 'ws';
 import { clientKey, createFailureLimiter, isOriginAllowed, tokensMatch } from './auth.mjs';
 import { ConfigError, loadConfig } from './config.mjs';
+import { authOk, encode } from './protocol.mjs';
 import { createStaticHandler } from './static.mjs';
 import { createVoiceSession } from './voice-session.mjs';
+import { AUTH_TIMEOUT_MS, awaitAuth } from './ws-auth.mjs';
 
 const PUBLIC_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{8,64}$/;
 const MAX_CONTROL_PAYLOAD = 64 * 1024;
 
-function rejectUpgrade(socket, statusCode, text) {
-  socket.write(`HTTP/1.1 ${statusCode} ${text}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+function rejectUpgrade(socket, statusCode, text, body = '') {
+  socket.write(`HTTP/1.1 ${statusCode} ${text}\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
   socket.destroy();
 }
 
 export function createGateway(config, deps = {}) {
   const log = deps.log ?? console;
   const limiter = deps.limiter ?? createFailureLimiter();
+  const authTimeoutMs = deps.authTimeoutMs ?? AUTH_TIMEOUT_MS;
   const serveStatic = createStaticHandler({ publicDir: deps.publicDir ?? PUBLIC_DIR, basePath: config.basePath });
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_CONTROL_PAYLOAD });
   const sessions = new Set();
@@ -37,6 +40,34 @@ export function createGateway(config, deps = {}) {
     }
   });
 
+  function startSession(ws, sessionId) {
+    const voice = createVoiceSession({
+      socket: ws,
+      config,
+      sessionId,
+      deps: { fetchImpl: deps.fetchImpl ?? fetch, WebSocketImpl: deps.WebSocketImpl ?? WebSocket, log },
+    });
+    sessions.add(voice);
+    ws.on('close', () => sessions.delete(voice));
+    log.info(`[ws] session opened (${sessions.size} active)`);
+  }
+
+  // Compatibility path (ALLOW_QUERY_TOKEN=true): verify ?token= during the upgrade like old clients expect.
+  function checkQueryToken(socket, key, token) {
+    if (limiter.isBlocked(key)) {
+      rejectUpgrade(socket, 429, 'Too Many Requests');
+      return false;
+    }
+    if (!tokensMatch(config.voiceToken, token)) {
+      limiter.recordFailure(key);
+      log.warn(`[ws] bad query token from ${key}`);
+      rejectUpgrade(socket, 401, 'Unauthorized');
+      return false;
+    }
+    limiter.clear(key);
+    return true;
+  }
+
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, 'http://localhost');
     if (url.pathname !== `${config.basePath}/ws`) return rejectUpgrade(socket, 404, 'Not Found');
@@ -48,28 +79,32 @@ export function createGateway(config, deps = {}) {
     }
 
     const key = clientKey(req, config.trustProxy);
-    if (limiter.isBlocked(key)) return rejectUpgrade(socket, 429, 'Too Many Requests');
-
-    if (!tokensMatch(config.voiceToken, url.searchParams.get('token') ?? '')) {
-      limiter.recordFailure(key);
-      log.warn(`[ws] bad token from ${key}`);
-      return rejectUpgrade(socket, 401, 'Unauthorized');
+    const queryToken = url.searchParams.get('token');
+    if (queryToken !== null && !config.allowQueryToken) {
+      log.warn(`[ws] token in query string refused from ${key}`);
+      return rejectUpgrade(socket, 400, 'Bad Request', 'send the token as the first message {"type":"auth","token":...}, not in the URL (ALLOW_QUERY_TOKEN=true restores the old behaviour)\n');
     }
-    limiter.clear(key);
+    const preAuthenticated = queryToken !== null;
+    if (preAuthenticated && !checkQueryToken(socket, key, queryToken)) return;
 
     const requested = url.searchParams.get('session') ?? '';
     const sessionId = SESSION_ID_PATTERN.test(requested) ? requested : randomUUID();
 
     wss.handleUpgrade(req, socket, head, (ws) => {
-      const voice = createVoiceSession({
+      if (preAuthenticated) {
+        ws.send(encode(authOk()));
+        startSession(ws, sessionId);
+        return;
+      }
+      awaitAuth({
         socket: ws,
-        config,
-        sessionId,
-        deps: { fetchImpl: deps.fetchImpl ?? fetch, WebSocketImpl: deps.WebSocketImpl ?? WebSocket, log },
+        expectedToken: config.voiceToken,
+        limiter,
+        key,
+        timeoutMs: authTimeoutMs,
+        log,
+        onAuthenticated: () => startSession(ws, sessionId),
       });
-      sessions.add(voice);
-      ws.on('close', () => sessions.delete(voice));
-      log.info(`[ws] session opened (${sessions.size} active)`);
     });
   });
 

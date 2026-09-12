@@ -27,6 +27,8 @@ test('buildConfig applies defaults and normalises URLs and base path', () => {
   assert.equal(config.basePath, '/voice');
   assert.deepEqual(config.allowedOrigins, ['https://a.test', 'https://b.test']);
   assert.equal(config.trustProxy, false);
+  assert.equal(config.allowQueryToken, false);
+  assert.equal(buildConfig({ ...valid, ALLOW_QUERY_TOKEN: 'true' }).allowQueryToken, true);
   assert.equal(config.ackDelayMs, 1500);
   assert.equal(config.nariTurnDetection, 'client');
   assert.ok(Object.isFrozen(config));

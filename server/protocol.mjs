@@ -2,6 +2,7 @@
 // browser to gateway = 16 kHz PCM16 mono, gateway to browser = 24 kHz PCM16 mono.
 
 export const ServerMessage = Object.freeze({
+  AUTH_OK: 'auth_ok',
   PARTIAL: 'partial',
   FINAL: 'final',
   STATUS: 'status',
@@ -12,6 +13,7 @@ export const ServerMessage = Object.freeze({
 });
 
 export const ClientMessage = Object.freeze({
+  AUTH: 'auth',
   INTERRUPT: 'interrupt',
   HEARD_MS: 'heard_ms',
   SPEECH_START: 'speech_start',
@@ -21,6 +23,7 @@ export const ClientMessage = Object.freeze({
 const CLIENT_TYPES = new Set(Object.values(ClientMessage));
 const SERVER_TYPES = new Set(Object.values(ServerMessage));
 const MAX_CONTROL_BYTES = 4096;
+const MAX_TOKEN_LENGTH = 256;
 
 export class ProtocolError extends Error {
   constructor(message) {
@@ -29,6 +32,7 @@ export class ProtocolError extends Error {
   }
 }
 
+export const authOk = () => ({ type: ServerMessage.AUTH_OK });
 export const partial = (text) => ({ type: ServerMessage.PARTIAL, text });
 export const final = (text) => ({ type: ServerMessage.FINAL, text });
 export const status = (state, detail) => (detail === undefined ? { type: ServerMessage.STATUS, state } : { type: ServerMessage.STATUS, state, detail });
@@ -57,6 +61,10 @@ export function decodeClientMessage(text) {
   }
   if (!parsed || typeof parsed !== 'object' || !CLIENT_TYPES.has(parsed.type)) {
     throw new ProtocolError(`Unknown client message type: ${parsed?.type}`);
+  }
+  if (parsed.type === ClientMessage.AUTH) {
+    if (typeof parsed.token !== 'string' || parsed.token.length > MAX_TOKEN_LENGTH) throw new ProtocolError('auth.token must be a short string');
+    return { type: ClientMessage.AUTH, token: parsed.token };
   }
   if (parsed.type === ClientMessage.HEARD_MS) {
     const ms = Number(parsed.ms);

@@ -74,6 +74,10 @@
     @keyframes spin { to { transform: rotate(360deg); } }
     #status { color: var(--muted); font-size: 14px; min-height: 20px; }
     #status.error { color: var(--danger); }
+    #connection { font-size: 12px; letter-spacing: 0.04em; color: var(--muted); min-height: 16px; }
+    #connection[data-state="connected"] { color: var(--ok); }
+    #connection[data-state="refused"] { color: var(--danger); }
+    #connection[data-state="reconnecting"], #connection[data-state="connecting"] { color: var(--accent-2); }
     .panel { width: min(640px, 100%); display: flex; flex-direction: column; gap: 12px; text-align: left; }
     .label { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
     #partial { min-height: 24px; color: var(--fg); font-size: 18px; }
@@ -94,6 +98,10 @@
     dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
     dialog h2 { margin: 0 0 6px; font-size: 18px; }
     dialog p { margin: 0 0 14px; color: var(--muted); font-size: 14px; }
+    dialog #tokenMessage { color: var(--danger); font-weight: 600; min-height: 0; }
+    dialog #tokenMessage:empty { display: none; }
+    dialog #tokenCount { font-size: 13px; color: var(--muted); margin: -8px 0 14px; }
+    dialog #tokenCount.warn { color: var(--danger); }
     dialog input {
       width: 100%; padding: 12px; border-radius: 10px; border: 1px solid rgba(125, 211, 252, 0.3);
       background: var(--bg); color: var(--fg); font-size: 16px; margin-bottom: 14px;
@@ -117,6 +125,7 @@
       <button class="orb" id="orb" data-state="idle" type="button" aria-label="Start talking"></button>
     </div>
     <div id="status">Tap the orb to start</div>
+    <div id="connection" data-state="idle">not connected</div>
     <section class="panel">
       <div>
         <div class="label">You</div>
@@ -135,10 +144,12 @@
   </footer>
 
   <dialog id="tokenDialog">
-    <form method="dialog">
+    <form method="dialog" id="tokenForm">
       <h2>Voice token</h2>
+      <p id="tokenMessage"></p>
       <p>Paste the VOICE_TOKEN from the gateway's .env. It stays in this browser only.</p>
-      <input id="tokenInput" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="VOICE_TOKEN">
+      <input id="tokenInput" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="text" placeholder="VOICE_TOKEN">
+      <div id="tokenCount">0 characters</div>
       <button id="tokenSave" type="submit">Save</button>
     </form>
   </dialog>

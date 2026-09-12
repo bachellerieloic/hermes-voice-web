@@ -1,13 +1,12 @@
 // Browser client: mic capture, Silero VAD barge-in, echo-safe playback, and the gateway protocol.
 // Everything is relative to the page URL so the app works under any BASE_PATH.
+import { normalizeToken, parseTokenFragment, reconnectPolicy, refusalMessage, tokenHint } from './token.js';
 
 const STORAGE_TOKEN = 'hermes-voice.token';
 const STORAGE_SESSION = 'hermes-voice.session';
 const MIC_FRAME_MS = 40;
 const PREROLL_MS = 300;
 const POST_PLAYBACK_GATE_MS = 500;
-const RECONNECT_MIN_MS = 1000;
-const RECONNECT_MAX_MS = 10000;
 const VAD_OPTIONS = Object.freeze({
   model: 'v5',
   positiveSpeechThreshold: 0.6,
@@ -20,13 +19,16 @@ const VAD_OPTIONS = Object.freeze({
 const el = {
   orb: document.getElementById('orb'),
   status: document.getElementById('status'),
+  connection: document.getElementById('connection'),
   partial: document.getElementById('partial'),
   assistant: document.getElementById('assistant'),
   mute: document.getElementById('mute'),
   stop: document.getElementById('stop'),
   dialog: document.getElementById('tokenDialog'),
+  tokenForm: document.getElementById('tokenForm'),
   tokenInput: document.getElementById('tokenInput'),
-  tokenSave: document.getElementById('tokenSave'),
+  tokenCount: document.getElementById('tokenCount'),
+  tokenMessage: document.getElementById('tokenMessage'),
   changeToken: document.getElementById('changeToken'),
   newConversation: document.getElementById('newConversation'),
   loopback: document.getElementById('loopback'),
@@ -38,18 +40,21 @@ const app = {
   micNode: null,
   playerNode: null,
   vad: null,
-  socket: null,
   wakeLock: null,
-  sessionOpen: false,
+  audioReady: false,
   muted: false,
+  socket: null,
+  authenticated: false,
+  wantConnection: false,
+  connAttempts: 0,
+  reconnectTimer: null,
+  countdownTimer: null,
   serverState: 'idle',
   vadSpeaking: false,
   playedMs: 0,
   queuedAudio: false,
   gateUntil: 0,
   preroll: [],
-  reconnectDelay: RECONNECT_MIN_MS,
-  reconnectTimer: null,
   assistantBuffer: '',
 };
 
@@ -62,6 +67,9 @@ const storage = {
   set(key, value) {
     try { localStorage.setItem(key, value); } catch { /* private mode */ }
   },
+  remove(key) {
+    try { localStorage.removeItem(key); } catch { /* private mode */ }
+  },
 };
 
 function setStatus(text, isError = false) {
@@ -69,12 +77,17 @@ function setStatus(text, isError = false) {
   el.status.classList.toggle('error', isError);
 }
 
+function setConnection(state, text) {
+  el.connection.dataset.state = state;
+  el.connection.textContent = text;
+}
+
 function setOrb(state) {
   el.orb.dataset.state = state;
 }
 
 function refreshOrb() {
-  if (!app.sessionOpen) return setOrb('idle');
+  if (!app.audioReady || !app.authenticated) return setOrb('idle');
   if (app.vadSpeaking) return setOrb('hearing');
   if (app.serverState === 'speaking' || app.queuedAudio) return setOrb('speaking');
   setOrb(app.serverState);
@@ -88,20 +101,23 @@ function sessionId() {
   return fresh;
 }
 
-function gatewayUrl(token) {
+function gatewayUrl() {
   const url = new URL('ws', location.href);
   url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  url.searchParams.set('token', token);
   url.searchParams.set('session', sessionId());
   return url.toString();
 }
 
+function connected() {
+  return app.authenticated && app.socket?.readyState === WebSocket.OPEN;
+}
+
 function sendJson(message) {
-  if (app.socket?.readyState === WebSocket.OPEN) app.socket.send(JSON.stringify(message));
+  if (connected()) app.socket.send(JSON.stringify(message));
 }
 
 function micOpen() {
-  if (!app.sessionOpen || app.muted || app.socket?.readyState !== WebSocket.OPEN) return false;
+  if (!app.audioReady || app.muted || !connected()) return false;
   if (app.serverState === 'listening' && !app.queuedAudio) return Date.now() >= app.gateUntil;
   return app.vadSpeaking;
 }
@@ -172,6 +188,7 @@ async function setupMic(context) {
   mic.port.onmessage = (event) => onMicFrame(event.data);
   source.connect(mic);
   app.micNode = mic;
+  app.micSource = source;
 }
 
 function onMicFrame(buffer) {
@@ -186,7 +203,7 @@ function onMicFrame(buffer) {
 }
 
 function flushPreroll() {
-  if (app.preroll.length === 0 || app.socket?.readyState !== WebSocket.OPEN) return;
+  if (app.preroll.length === 0 || !connected()) return;
   for (const frame of app.preroll) app.socket.send(frame);
   app.preroll = [];
 }
@@ -255,15 +272,29 @@ function clearPlayback() {
 
 // ---------- gateway socket ----------
 
-function connect(token) {
-  const socket = new WebSocket(gatewayUrl(token));
+function clearReconnectTimers() {
+  clearTimeout(app.reconnectTimer);
+  clearInterval(app.countdownTimer);
+  app.reconnectTimer = null;
+  app.countdownTimer = null;
+}
+
+function connect() {
+  const token = storage.get(STORAGE_TOKEN);
+  if (!token) {
+    showTokenPrompt('');
+    return;
+  }
+  clearReconnectTimers();
+  app.wantConnection = true;
+  app.authenticated = false;
+  setConnection('connecting', app.connAttempts > 0 ? `connecting (attempt ${app.connAttempts + 1})` : 'connecting');
+
+  const socket = new WebSocket(gatewayUrl());
   socket.binaryType = 'arraybuffer';
   app.socket = socket;
 
-  socket.onopen = () => {
-    app.reconnectDelay = RECONNECT_MIN_MS;
-    setStatus('Listening');
-  };
+  socket.onopen = () => socket.send(JSON.stringify({ type: 'auth', token }));
   socket.onmessage = (event) => {
     if (event.data instanceof ArrayBuffer) {
       app.queuedAudio = true;
@@ -271,26 +302,78 @@ function connect(token) {
       refreshOrb();
       return;
     }
-    handleControl(JSON.parse(event.data));
+    let message;
+    try {
+      message = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+    if (message.type === 'auth_ok') {
+      app.authenticated = true;
+      app.connAttempts = 0;
+      setConnection('connected', 'connected');
+      refreshOrb();
+      return;
+    }
+    handleControl(message);
   };
   socket.onclose = (event) => {
     if (app.socket !== socket) return;
     app.socket = null;
+    app.authenticated = false;
     app.serverState = 'idle';
-    if (!app.sessionOpen) return;
-    if (event.code === 1008 || event.code === 4401) {
-      endSession('Token rejected');
-      el.dialog.showModal();
+    refreshOrb();
+    if (!app.wantConnection) {
+      setConnection('closed', 'disconnected');
       return;
     }
-    setStatus(`Reconnecting in ${Math.round(app.reconnectDelay / 1000)} s`, true);
-    setOrb('error');
-    app.reconnectTimer = setTimeout(() => {
-      app.reconnectDelay = Math.min(RECONNECT_MAX_MS, app.reconnectDelay * 2);
-      if (app.sessionOpen) connect(token);
-    }, app.reconnectDelay);
+    const decision = reconnectPolicy({ closeCode: event.code, attempts: app.connAttempts });
+    if (decision.action === 'auth_failed') {
+      tokenRefused(event.code);
+      return;
+    }
+    if (decision.action === 'give_up') {
+      app.wantConnection = false;
+      setConnection('refused', 'connection lost, tap the orb to retry');
+      return;
+    }
+    app.connAttempts += 1;
+    scheduleReconnect(decision.delayMs);
   };
   socket.onerror = () => {};
+}
+
+// 4401 or 4429: the gateway refused the token. Never retry with the same value.
+function tokenRefused(code) {
+  app.wantConnection = false;
+  app.connAttempts = 0;
+  storage.remove(STORAGE_TOKEN);
+  setConnection('refused', code === 4429 ? 'refused: too many failed attempts' : 'refused: token rejected');
+  setStatus('Enter a new token to continue', true);
+  showTokenPrompt(refusalMessage(code));
+}
+
+function scheduleReconnect(delayMs) {
+  let remaining = Math.ceil(delayMs / 1000);
+  setConnection('reconnecting', `reconnecting in ${remaining} s`);
+  app.countdownTimer = setInterval(() => {
+    remaining -= 1;
+    if (remaining > 0) setConnection('reconnecting', `reconnecting in ${remaining} s`);
+  }, 1000);
+  app.reconnectTimer = setTimeout(() => {
+    clearReconnectTimers();
+    if (app.wantConnection) connect();
+  }, delayMs);
+}
+
+function disconnect() {
+  app.wantConnection = false;
+  clearReconnectTimers();
+  const socket = app.socket;
+  app.socket = null;
+  app.authenticated = false;
+  socket?.close();
+  setConnection('closed', 'disconnected');
 }
 
 function handleControl(message) {
@@ -302,7 +385,7 @@ function handleControl(message) {
         app.assistantBuffer = '';
         el.assistant.textContent = '';
       }
-      setStatus(statusLabel(message));
+      setStatus(app.audioReady ? statusLabel(message) : 'Tap the orb to start talking');
       refreshOrb();
       break;
     case 'partial':
@@ -340,51 +423,83 @@ function statusLabel(message) {
 
 const capitalize = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
+// ---------- token prompt ----------
+
+function updateTokenCount() {
+  const hint = tokenHint(normalizeToken(el.tokenInput.value));
+  el.tokenCount.textContent = hint.text;
+  el.tokenCount.classList.toggle('warn', !hint.ok && hint.count > 0);
+}
+
+function showTokenPrompt(message) {
+  el.tokenMessage.textContent = message;
+  el.tokenInput.value = '';
+  updateTokenCount();
+  if (!el.dialog.open) el.dialog.showModal();
+}
+
 // ---------- session lifecycle ----------
 
-async function startSession() {
-  const token = storage.get(STORAGE_TOKEN);
-  if (!token) {
-    el.dialog.showModal();
+async function startAudio() {
+  setStatus('Starting audio');
+  if (navigator.audioSession) {
+    try { navigator.audioSession.type = 'play-and-record'; } catch { /* unsupported value */ }
+  }
+  const context = await ensureAudioContext();
+  if (!app.playerNode) await setupPlayback(context);
+  if (!app.micStream) await setupMic(context);
+  if (!app.vad) await setupVad(context);
+  app.audioReady = true;
+  app.muted = false;
+  el.mute.disabled = false;
+  el.stop.disabled = false;
+  el.mute.textContent = 'Mute';
+  el.mute.classList.remove('active');
+  el.orb.classList.remove('muted');
+  await requestWakeLock();
+}
+
+async function onOrbTap() {
+  if (!storage.get(STORAGE_TOKEN)) {
+    showTokenPrompt('');
     return;
   }
   try {
-    setStatus('Starting audio');
-    if (navigator.audioSession) {
-      try { navigator.audioSession.type = 'play-and-record'; } catch { /* unsupported value */ }
-    }
-    const context = await ensureAudioContext();
-    if (!app.playerNode) await setupPlayback(context);
-    if (!app.micStream) await setupMic(context);
-    if (!app.vad) await setupVad(context);
-    app.sessionOpen = true;
-    app.muted = false;
-    el.mute.disabled = false;
-    el.stop.disabled = false;
-    el.mute.textContent = 'Mute';
-    el.orb.classList.remove('muted');
-    await requestWakeLock();
-    connect(token);
-    refreshOrb();
+    if (!app.audioReady) await startAudio();
+    else await ensureAudioContext();
   } catch (err) {
     console.error(err);
-    setStatus(err.message || 'Could not start', true);
+    setStatus(err.message || 'Could not start audio', true);
     setOrb('error');
+    return;
   }
+  if (!app.socket) connect();
+  else if (connected()) setStatus('Listening');
+  refreshOrb();
 }
 
-function endSession(reason = 'Session ended') {
-  app.sessionOpen = false;
-  clearTimeout(app.reconnectTimer);
-  const socket = app.socket;
-  app.socket = null;
-  socket?.close();
-  clearPlayback();
-  app.serverState = 'idle';
+function stopAudio() {
+  app.vad?.destroy().catch(() => {});
+  app.vad = null;
+  app.micNode?.disconnect();
+  app.micSource?.disconnect();
+  app.micNode = null;
+  app.micSource = null;
+  for (const track of app.micStream?.getTracks() ?? []) track.stop();
+  app.micStream = null;
+  app.audioReady = false;
   app.vadSpeaking = false;
+  app.preroll = [];
+  clearPlayback();
   el.mute.disabled = true;
   el.stop.disabled = true;
   releaseWakeLock();
+}
+
+function endSession(reason = 'Session ended') {
+  disconnect();
+  stopAudio();
+  app.serverState = 'idle';
   setStatus(reason);
   refreshOrb();
 }
@@ -412,36 +527,38 @@ function releaseWakeLock() {
 
 // ---------- wiring ----------
 
-el.orb.addEventListener('click', () => {
-  if (app.sessionOpen) {
-    ensureAudioContext().catch(() => {});
-    return;
-  }
-  startSession();
-});
+el.orb.addEventListener('click', () => { onOrbTap(); });
 el.mute.addEventListener('click', toggleMute);
 el.stop.addEventListener('click', () => endSession());
-el.changeToken.addEventListener('click', () => {
-  el.tokenInput.value = storage.get(STORAGE_TOKEN) ?? '';
-  el.dialog.showModal();
-});
+el.changeToken.addEventListener('click', () => showTokenPrompt(''));
 el.newConversation.addEventListener('click', () => {
   storage.set(STORAGE_SESSION, crypto.randomUUID());
   el.assistant.textContent = '';
   el.partial.textContent = '';
-  if (app.sessionOpen) {
-    const token = storage.get(STORAGE_TOKEN);
-    app.socket?.close();
-    app.socket = null;
-    connect(token);
+  app.assistantBuffer = '';
+  if (app.socket || app.wantConnection) {
+    disconnect();
+    connect();
   }
   setStatus('New conversation');
 });
+el.tokenInput.addEventListener('input', updateTokenCount);
+el.tokenForm.addEventListener('submit', (event) => {
+  const token = normalizeToken(el.tokenInput.value);
+  if (!token) {
+    event.preventDefault();
+    updateTokenCount();
+    return;
+  }
+  storage.set(STORAGE_TOKEN, token);
+});
 el.dialog.addEventListener('close', () => {
-  const value = el.tokenInput.value.trim();
-  if (value) storage.set(STORAGE_TOKEN, value);
   el.tokenInput.value = '';
-  if (value && !app.sessionOpen) startSession();
+  el.tokenMessage.textContent = '';
+  if (storage.get(STORAGE_TOKEN) && !app.socket) {
+    app.connAttempts = 0;
+    connect();
+  }
 });
 
 // iOS suspends the AudioContext on any route change; resume on every gesture.
@@ -451,10 +568,25 @@ for (const type of ['pointerdown', 'touchend', 'keydown']) {
   }, { passive: true });
 }
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && app.sessionOpen) {
+  if (document.visibilityState !== 'visible') return;
+  if (app.audioReady) {
     requestWakeLock();
     ensureAudioContext().catch(() => {});
   }
+  if (app.wantConnection && !app.socket && !app.reconnectTimer) connect();
 });
 
-if (!storage.get(STORAGE_TOKEN)) setStatus('Tap the orb, then paste your voice token');
+// Magic link: https://host/voice/#token=... keeps the token in the fragment, which is never sent to
+// the server. Store it, scrub the address bar, and connect right away so a bad token shows up now.
+const linkedToken = parseTokenFragment(location.hash);
+if (linkedToken) {
+  storage.set(STORAGE_TOKEN, linkedToken);
+  history.replaceState(null, '', location.pathname + location.search);
+  setStatus('Token saved from the link, tap the orb to start');
+}
+if (storage.get(STORAGE_TOKEN)) {
+  connect();
+} else {
+  setConnection('idle', 'no token yet');
+  setStatus('Tap the orb, then paste your voice token');
+}

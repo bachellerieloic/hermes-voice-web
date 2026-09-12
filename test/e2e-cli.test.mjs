@@ -154,7 +154,7 @@ test('the CLI exits 1 on a bad token and 2 on bad arguments', async () => {
   const wavPath = join(dir, 'question.wav');
   const rejected = await runCli(['--url', wsUrl, '--token', 'wrong-token-value-00', '--wav', wavPath, '--timeout', '10']);
   assert.equal(rejected.code, 1);
-  assert.match(rejected.stderr, /HTTP 401/);
+  assert.match(rejected.stderr, /4401/);
   assert.match(rejected.stderr, /VOICE_TOKEN/);
   const usage = await runCli(['--wav', wavPath]);
   assert.equal(usage.code, 2);
