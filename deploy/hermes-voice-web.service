@@ -1,0 +1,24 @@
+# systemd user unit. Install with:
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/hermes-voice-web.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now hermes-voice-web
+#   loginctl enable-linger $USER   # keep user services running after logout
+# Adjust the node path to your nvm install (run: nvm which 22).
+[Unit]
+Description=hermes-voice-web gateway (browser voice for Hermes Agent)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/hermes-voice-web
+ExecStart=%h/.nvm/versions/node/v22.23.2/bin/node server/index.mjs
+Restart=on-failure
+RestartSec=3
+Environment=NODE_ENV=production
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

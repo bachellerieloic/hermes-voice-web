@@ -1,0 +1,32 @@
+hermes-voice-web
+Copyright (c) 2026 Loic Bachellerie
+Licensed under the MIT License (see LICENSE).
+
+This project borrows ideas and small pieces of code from the following MIT licensed projects.
+No large blocks were copied; the relevant files carry a comment pointing back here.
+
+hermes-live-voice (https://github.com/bielcarpi/hermes-live-voice)
+  Copyright (c) 2026 Hermes Live contributors, MIT License
+  - public/worklets/mic.js: the fixed-size frame-and-flush capture pattern (clients/browser/mic-worklet.js)
+  - public/worklets/player.js and server/session.mjs: the idea of measuring played milliseconds on a
+    barge-in and truncating the assistant transcript to what was heard (clients/browser/hermes-live-client.js)
+
+jarvis_ai (https://github.com/eadmin2/jarvis_ai)
+  Copyright (c) 2026 Chris Lassiter, MIT License
+  - server/sentences.mjs: sentence extraction on terminal punctuation and the text-to-speech cleaner
+    that drops think tags, replaces code blocks with a spoken placeholder and strips markdown (server/server.py)
+
+google-adk-realtime-deepagents-example (https://github.com/langchain-ai/google-adk-realtime-deepagents-example)
+  Copyright (c) LangChain, Inc., MIT License
+  - public/worklets/player.js: the queue-and-drain playback worklet with a "clear" message for barge-in
+    (static/pcm-player-processor.js)
+
+Runtime dependencies vendored into public/vad/ at install time (not committed):
+
+@ricky0123/vad-web (https://github.com/ricky0123/vad), ISC License
+  Ships the Silero VAD ONNX models (https://github.com/snakers4/silero-vad), MIT License
+
+onnxruntime-web (https://github.com/microsoft/onnxruntime), MIT License
+  Copyright (c) Microsoft Corporation
+
+ws (https://github.com/websockets/ws), MIT License
