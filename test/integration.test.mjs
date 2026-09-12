@@ -116,7 +116,7 @@ test('an interrupted turn: barge-in aborts Hermes and TTS, flushes, and the next
 });
 
 test('a slow first token triggers one spoken acknowledgement before the answer', async () => {
-  const quick = createGateway(makeConfig({ ACK_DELAY_MS: '40' }), { log: quiet });
+  const quick = createGateway(makeConfig({ ACK_DELAY_MS: '40', ACK_TEXT: 'On it.' }), { log: quiet });
   const { port } = await quick.listen();
   hermes.script([{ delay: 400, text: 'Sure.' }]);
   const ttsBefore = nari.state.ttsRequests.length;

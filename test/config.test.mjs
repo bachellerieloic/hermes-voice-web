@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ConfigError, buildConfig, nariRealtimeUrl, normalizeBasePath, parseDotEnv, parseOrigins } from '../server/config.mjs';
+import { ConfigError, buildConfig, nariRealtimeUrl, normalizeBasePath, parseAckLines, parseDotEnv, parseOrigins } from '../server/config.mjs';
 
 const valid = { HERMES_API_KEY: 'h', NARI_API_KEY: 'n', VOICE_TOKEN: 'a-long-enough-token-value' };
 
@@ -30,8 +30,22 @@ test('buildConfig applies defaults and normalises URLs and base path', () => {
   assert.equal(config.allowQueryToken, false);
   assert.equal(buildConfig({ ...valid, ALLOW_QUERY_TOKEN: 'true' }).allowQueryToken, true);
   assert.equal(config.ackDelayMs, 1500);
+  assert.ok(config.ackLines.length >= 4, 'default acknowledgement pool has several lines');
+  assert.ok(config.ackLines.includes('On it.'));
+  assert.ok(Object.isFrozen(config.ackLines));
   assert.equal(config.nariTurnDetection, 'client');
   assert.ok(Object.isFrozen(config));
+});
+
+test('parseAckLines splits the pool, trims, and drops blanks', () => {
+  assert.deepEqual(parseAckLines('Right away. | One moment. |On it.'), ['Right away.', 'One moment.', 'On it.']);
+  assert.deepEqual(parseAckLines('On it.'), ['On it.']);
+  assert.deepEqual(parseAckLines(''), []);
+  assert.deepEqual(parseAckLines('  |  '), []);
+});
+
+test('an empty ACK_TEXT pool means no spoken filler', () => {
+  assert.deepEqual(buildConfig({ ...valid, ACK_TEXT: '' }).ackLines, []);
 });
 
 test('normalizeBasePath handles the common spellings', () => {

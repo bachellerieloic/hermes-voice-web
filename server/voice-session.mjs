@@ -20,6 +20,18 @@ export function createVoiceSession({ socket, config, sessionId, deps }) {
   let session = createSession();
   let active = null;
   let ackTimer = null;
+  let lastAck = null;
+
+  // Pick an acknowledgement at random, never the one used on the previous turn,
+  // so a spoken filler never sounds scripted. Empty pool means stay silent.
+  function pickAck() {
+    const lines = config.ackLines;
+    if (!lines || lines.length === 0) return '';
+    const choices = lines.length > 1 ? lines.filter((line) => line !== lastAck) : lines;
+    const pick = choices[Math.floor(Math.random() * choices.length)];
+    lastAck = pick;
+    return pick;
+  }
 
   const sendJson = (message) => {
     if (socket.readyState === OPEN) socket.send(encode(message));
@@ -62,7 +74,10 @@ export function createVoiceSession({ socket, config, sessionId, deps }) {
         startTurn(effect.messages, effect.turn);
         break;
       case Effect.SPEAK_ACK:
-        if (active && active.turn === effect.turn) enqueueSpeech(active, config.ackText, true);
+        if (active && active.turn === effect.turn) {
+          const line = pickAck();
+          if (line) enqueueSpeech(active, line, true);
+        }
         break;
       case Effect.ARM_ACK:
         clearTimeout(ackTimer);

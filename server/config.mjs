@@ -18,7 +18,10 @@ const DEFAULTS = Object.freeze({
   TRUST_PROXY: 'false',
   ALLOW_QUERY_TOKEN: 'false',
   ACK_DELAY_MS: '1500',
-  ACK_TEXT: 'On it.',
+  // Pipe-separated pool. The gateway picks one at random per turn and never
+  // repeats the previous one, so the wait never sounds scripted. Set to a
+  // single line to always say the same thing, or to "" to stay silent.
+  ACK_TEXT: 'Right away.|One moment.|Let me check.|On it.|Looking into that.|Give me a second.|Checking now.|Working on it.',
 });
 
 const MIN_TOKEN_LENGTH = 16;
@@ -61,6 +64,14 @@ export function normalizeBasePath(raw) {
 export function parseOrigins(raw) {
   return (raw ?? '')
     .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s !== '');
+}
+
+/** Parse the pipe-separated acknowledgement pool. Empty means stay silent. */
+export function parseAckLines(raw) {
+  return (raw ?? '')
+    .split('|')
     .map((s) => s.trim())
     .filter((s) => s !== '');
 }
@@ -123,7 +134,8 @@ export function buildConfig(env) {
     trustProxy: parseBoolean(get('TRUST_PROXY')),
     allowQueryToken: parseBoolean(get('ALLOW_QUERY_TOKEN')),
     ackDelayMs,
-    ackText: get('ACK_TEXT'),
+    // Read raw so an explicit empty ACK_TEXT means "stay silent", not "use the default pool".
+    ackLines: Object.freeze(parseAckLines(env.ACK_TEXT !== undefined ? String(env.ACK_TEXT) : DEFAULTS.ACK_TEXT)),
   });
 }
 
