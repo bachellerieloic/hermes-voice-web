@@ -1,6 +1,6 @@
 // Pure conversation state machine. reduce(session, event) returns a new session and a list of
 // effects for the runtime to perform; nothing in here touches the network or timers.
-import { assistantText, error, final, flush, status } from './protocol.mjs';
+import { assistantText, error, final, flush, status, turnDone } from './protocol.mjs';
 
 export const State = Object.freeze({
   IDLE: 'idle',
@@ -144,7 +144,7 @@ const handlers = {
     : result(session)),
 
   turn_done: (session, event) => (isBusy(session) && event.turn === session.turn
-    ? result(patch(session, { state: State.LISTENING }), [send(assistantText('', true)), send(status(State.LISTENING))])
+    ? result(patch(session, { state: State.LISTENING }), [send(assistantText('', true)), send(turnDone(session.turn)), send(status(State.LISTENING))])
     : result(session)),
 
   turn_error: (session, event) => (isBusy(session) && event.turn === session.turn

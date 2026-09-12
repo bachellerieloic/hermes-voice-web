@@ -44,6 +44,9 @@ test('first token disarms the ack, audio starts speaking, turn_done returns to l
   assert.ok(types(r.effects).includes(Effect.DISARM_ACK));
   assert.ok(sent(r.effects).some((m) => m.type === 'status' && m.state === 'speaking'));
   assert.ok(sent(r.effects).some((m) => m.type === 'assistant_text' && m.done === true));
+  const messages = sent(r.effects).map((m) => m.type);
+  assert.ok(messages.indexOf('turn_done') > messages.indexOf('assistant_text'));
+  assert.ok(messages.indexOf('turn_done') < messages.lastIndexOf('status'));
 });
 
 test('a stale turn_done does not touch the current turn', () => {

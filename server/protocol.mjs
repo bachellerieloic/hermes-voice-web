@@ -6,6 +6,7 @@ export const ServerMessage = Object.freeze({
   FINAL: 'final',
   STATUS: 'status',
   ASSISTANT_TEXT: 'assistant_text',
+  TURN_DONE: 'turn_done',
   FLUSH: 'flush',
   ERROR: 'error',
 });
@@ -32,6 +33,7 @@ export const partial = (text) => ({ type: ServerMessage.PARTIAL, text });
 export const final = (text) => ({ type: ServerMessage.FINAL, text });
 export const status = (state, detail) => (detail === undefined ? { type: ServerMessage.STATUS, state } : { type: ServerMessage.STATUS, state, detail });
 export const assistantText = (text, done = false) => ({ type: ServerMessage.ASSISTANT_TEXT, text, done });
+export const turnDone = (turn) => ({ type: ServerMessage.TURN_DONE, turn });
 export const flush = () => ({ type: ServerMessage.FLUSH });
 export const error = (message) => ({ type: ServerMessage.ERROR, message });
 

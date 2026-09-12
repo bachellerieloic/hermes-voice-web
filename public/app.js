@@ -320,6 +320,8 @@ function handleControl(message) {
         el.assistant.scrollTop = el.assistant.scrollHeight;
       }
       break;
+    case 'turn_done':
+      break;
     case 'flush':
       clearPlayback();
       break;

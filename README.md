@@ -199,8 +199,33 @@ Browser to gateway: `speech_start`, `speech_end` (commit the utterance), `interr
 `heard_ms {ms}`; binary frames are 16 kHz PCM16 mono.
 
 Gateway to browser: `status {state, detail?}`, `partial {text}`, `final {text}`,
-`assistant_text {text, done}`, `flush` (empty the playback queue), `error {message}`; binary frames
-are 24 kHz PCM16 mono.
+`assistant_text {text, done}`, `turn_done {turn}`, `flush` (empty the playback queue),
+`error {message}`; binary frames are 24 kHz PCM16 mono.
+
+## Verify without a browser
+
+`scripts/e2e-cli.mjs` is a headless client that speaks the browser protocol against a live gateway,
+so you can check a VPS with real audio before anyone opens the page:
+
+```bash
+# from a recording (any sample rate, mono PCM16 wav)
+node scripts/e2e-cli.mjs --url ws://127.0.0.1:8765/voice/ws --token "$VOICE_TOKEN" --wav question.wav
+
+# or let Nari say the question for you (needs NARI_API_KEY in the environment)
+NARI_API_KEY=... node scripts/e2e-cli.mjs --url ws://127.0.0.1:8765/voice/ws --token "$VOICE_TOKEN" --say "What time is it?"
+```
+
+It resamples the audio to 16 kHz, sends `speech_start`, streams 20 ms frames in real time, sends
+`speech_end`, prints every control message as it arrives, writes the spoken reply to `reply.pcm`
+(24 kHz s16le, play it with `ffplay -f s16le -ar 24000 -ac 1 reply.pcm`) and exits 0 on
+`turn_done` with a one-line summary: transcript, assistant text length, audio length, time to the
+first partial and time from `speech_end` to the first audio. It exits 1 on an `error` message, a
+rejected upgrade or a 90 s timeout (`--timeout` changes it). Use `--url` with the public `wss://`
+address to test through the reverse proxy.
+
+The Origin header defaults to `https://<host of --url>`. When the gateway has `ALLOWED_ORIGINS`
+set, a loopback run such as `ws://127.0.0.1:8765/voice/ws` is refused with HTTP 403 until you pass
+the real page origin, for example `--origin https://hermes.example`; the CLI prints that hint.
 
 ## Development
 
