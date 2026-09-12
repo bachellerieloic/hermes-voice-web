@@ -143,3 +143,39 @@ test('Hermes errors surface as a friendly error message and the session keeps li
   client.close();
   await broken.close();
 });
+
+test('the business snapshot is prepended as a system message when the provider yields text', async () => {
+  const snapshotText = 'Business snapshot (generated 2026-09-12 11:59 America/Vancouver):\nRevenue: MRR 98 CAD, 2 active subscriptions.';
+  const gw = createGateway(makeConfig(), { log: quiet, snapshot: { get: async () => snapshotText } });
+  const { port } = await gw.listen();
+  hermes.script([{ delay: 1, text: 'Ninety eight dollars.' }]);
+  const before = hermes.requests.length;
+  const client = await connectBrowser({ gatewayUrl: `http://127.0.0.1:${port}`, token: TOKEN, origin: `http://127.0.0.1:${port}`, session: 'browser-snapshot-01' });
+  await client.waitFor((m) => m.type === 'status' && m.state === 'listening');
+  await speak(client, 'how is revenue');
+  await client.waitFor((m) => m.type === 'assistant_text' && m.done === true);
+
+  const request = hermes.requests[before];
+  assert.equal(request.body.messages[0].role, 'system');
+  assert.match(request.body.messages[0].content, /voice assistant for the founder/);
+  assert.match(request.body.messages[0].content, /MRR 98 CAD/);
+  assert.deepEqual(request.body.messages[request.body.messages.length - 1], { role: 'user', content: 'how is revenue' });
+  client.close();
+  await gw.close();
+});
+
+test('no snapshot system message is sent when the provider yields null', async () => {
+  const gw = createGateway(makeConfig(), { log: quiet, snapshot: { get: async () => null } });
+  const { port } = await gw.listen();
+  hermes.script([{ delay: 1, text: 'I do not have that.' }]);
+  const before = hermes.requests.length;
+  const client = await connectBrowser({ gatewayUrl: `http://127.0.0.1:${port}`, token: TOKEN, origin: `http://127.0.0.1:${port}`, session: 'browser-snapshot-02' });
+  await client.waitFor((m) => m.type === 'status' && m.state === 'listening');
+  await speak(client, 'how is revenue');
+  await client.waitFor((m) => m.type === 'assistant_text' && m.done === true);
+
+  const request = hermes.requests[before];
+  assert.deepEqual(request.body.messages, [{ role: 'user', content: 'how is revenue' }]);
+  client.close();
+  await gw.close();
+});

@@ -22,6 +22,12 @@ const DEFAULTS = Object.freeze({
   // repeats the previous one, so the wait never sounds scripted. Set to a
   // single line to always say the same thing, or to "" to stay silent.
   ACK_TEXT: 'Right away.|One moment.|Let me check.|On it.|Looking into that.|Give me a second.|Checking now.|Working on it.',
+  // Business awareness: an optional read-only endpoint that returns live business numbers.
+  // An empty url or token leaves the feature inert. See server/snapshot.mjs.
+  AGENT_SNAPSHOT_URL: '',
+  AGENT_SNAPSHOT_TOKEN: '',
+  SNAPSHOT_TTL_MS: '120000',
+  AGENT_SNAPSHOT_BRIEF: 'false',
 });
 
 const MIN_TOKEN_LENGTH = 16;
@@ -101,6 +107,7 @@ export function buildConfig(env) {
   const nariApiUrl = get('NARI_API_URL');
   const port = Number(get('PORT'));
   const ackDelayMs = Number(get('ACK_DELAY_MS'));
+  const snapshotTtlMs = Number(get('SNAPSHOT_TTL_MS'));
   const turnDetection = get('NARI_TURN_DETECTION');
 
   if (!hermesApiKey) problems.push('HERMES_API_KEY is required (the API_SERVER_KEY of your Hermes Agent)');
@@ -111,6 +118,7 @@ export function buildConfig(env) {
   if (!isHttpUrl(nariApiUrl)) problems.push('NARI_API_URL must be an http(s) URL');
   if (!Number.isInteger(port) || port < 0 || port > 65535) problems.push('PORT must be an integer between 0 and 65535');
   if (!Number.isFinite(ackDelayMs) || ackDelayMs < 0) problems.push('ACK_DELAY_MS must be a non-negative number');
+  if (!Number.isInteger(snapshotTtlMs) || snapshotTtlMs < 0) problems.push('SNAPSHOT_TTL_MS must be a non-negative integer');
   if (!TURN_DETECTION_MODES.has(turnDetection)) problems.push('NARI_TURN_DETECTION must be "client" or "server_vad"');
 
   if (problems.length > 0) throw new ConfigError(problems);
@@ -136,6 +144,10 @@ export function buildConfig(env) {
     ackDelayMs,
     // Read raw so an explicit empty ACK_TEXT means "stay silent", not "use the default pool".
     ackLines: Object.freeze(parseAckLines(env.ACK_TEXT !== undefined ? String(env.ACK_TEXT) : DEFAULTS.ACK_TEXT)),
+    agentSnapshotUrl: get('AGENT_SNAPSHOT_URL'),
+    agentSnapshotToken: get('AGENT_SNAPSHOT_TOKEN'),
+    snapshotTtlMs,
+    agentSnapshotBrief: parseBoolean(get('AGENT_SNAPSHOT_BRIEF')),
   });
 }
 
