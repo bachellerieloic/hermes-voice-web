@@ -38,7 +38,34 @@ function fullPayload(overrides = {}) {
     },
     revenue: { mrr: 98, currency: 'CAD', activeSubscriptions: 2 },
     members: { totalActive: 187, newThisMonth: 3 },
-    dinners: { upcoming: [{ city: 'Vancouver', date: '2026-09-18', status: 'open' }, { city: 'Toronto', date: '2026-09-25', status: 'open' }] },
+    dinners: {
+      upcoming: [
+        {
+          id: 'din-van',
+          city: 'Vancouver',
+          date: '2026-09-17',
+          time: '19:00',
+          status: 'confirmed',
+          seatsFilled: 6,
+          seatsTotal: 8,
+          joiningOpen: true,
+          revealed: false,
+          attendees: ['Ana', 'Ben', 'Cy'],
+        },
+        {
+          id: 'din-tor',
+          city: 'Toronto',
+          date: '2026-09-24',
+          time: '19:00',
+          status: 'planning',
+          seatsFilled: 2,
+          seatsTotal: 8,
+          joiningOpen: true,
+          revealed: false,
+          attendees: [],
+        },
+      ],
+    },
     errors: [],
     ...overrides,
   };
@@ -51,7 +78,7 @@ test('formatSnapshot renders a full payload as compact speakable text', () => {
     'Web, Sep 5 to Sep 11: 1503 sessions, up 929% week over week; 0 conversions. Search Sep 3 to Sep 9: 31 clicks, 1784 impressions, clicks up 11%.',
     'Revenue: MRR 98 CAD, 2 active subscriptions.',
     'Members: 187 active, 3 new this month.',
-    'Upcoming dinners: Vancouver Sep 18 (open), Toronto Sep 25 (open).',
+    'Upcoming dinners: Vancouver Thu Sep 17 7pm, 6 of 8 seats, joining open, attending Ana, Ben, Cy. Toronto Thu Sep 24 7pm, 2 of 8 seats, joining open.',
   ].join('\n'));
 });
 
@@ -82,6 +109,52 @@ test('formatSnapshot returns null when every section is null or the payload is n
 test('formatSnapshot reports an empty dinners list as none scheduled', () => {
   const text = formatSnapshot(fullPayload({ dinners: { upcoming: [] } }));
   assert.match(text, /Upcoming dinners: none scheduled\./);
+});
+
+test('formatSnapshot says joining closed and appends the plus-more count', () => {
+  const text = formatSnapshot(fullPayload({
+    dinners: {
+      upcoming: [{
+        id: 'din-1', city: 'Vancouver', date: '2026-09-17', time: '19:00', status: 'confirmed',
+        seatsFilled: 8, seatsTotal: 8, joiningOpen: false, revealed: true,
+        attendees: ['Ana', 'Ben'], plusMore: 3,
+      }],
+    },
+  }));
+  assert.match(text, /Upcoming dinners: Vancouver Thu Sep 17 7pm, 8 of 8 seats, joining closed, attending Ana, Ben and 3 more\./);
+});
+
+test('formatSnapshot omits attending when the attendee list is empty', () => {
+  const text = formatSnapshot(fullPayload({
+    dinners: {
+      upcoming: [{
+        id: 'din-1', city: 'Toronto', date: '2026-09-24', time: '19:00', status: 'planning',
+        seatsFilled: 0, seatsTotal: 8, joiningOpen: true, revealed: false, attendees: [],
+      }],
+    },
+  }));
+  assert.match(text, /Upcoming dinners: Toronto Thu Sep 24 7pm, 0 of 8 seats, joining open\./);
+  assert.doesNotMatch(text, /attending/);
+});
+
+test('formatSnapshot still renders an older {city, date, status} dinner shape', () => {
+  const text = formatSnapshot(fullPayload({
+    dinners: { upcoming: [{ city: 'Vancouver', date: '2026-09-17', status: 'open' }] },
+  }));
+  assert.match(text, /Upcoming dinners: Vancouver Sep 17 \(open\)\./);
+  assert.doesNotMatch(text, /seats/);
+  assert.doesNotMatch(text, /joining/);
+});
+
+test('formatSnapshot renders at most the next six dinners', () => {
+  const upcoming = Array.from({ length: 9 }, (_, i) => ({
+    id: `din-${i}`, city: `City${i}`, date: '2026-09-17', time: '19:00', status: 'confirmed',
+    seatsFilled: 0, seatsTotal: 8, joiningOpen: true, revealed: false, attendees: [],
+  }));
+  const text = formatSnapshot(fullPayload({ dinners: { upcoming } }));
+  assert.match(text, /City0 /);
+  assert.match(text, /City5 /);
+  assert.doesNotMatch(text, /City6 /);
 });
 
 test('formatSnapshot includes the web brief on its own line only when present', () => {
